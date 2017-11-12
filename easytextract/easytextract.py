@@ -8,16 +8,15 @@
 # License: MIT
 #
 # INSTALL NOTE:
-# You need to pip install textract and install tesseract v3 for your platform before launching this script.
-# To extract from .doc (not .docx), you also need to unzip antiword in C:\antiword\antiword.exe
-# Tested on Python 2.7.11
+# You need to pip install textract and install tesseract >= v3.02 for your platform before launching this script.
+# To extract from .doc (not needed for .docx), you also need to unzip antiword in C:\antiword\antiword.exe
+# Tested on Python 2.7.12
 #
 # TODO:
 # * increase size of images before feeding to tesseract OCR for better performance
 # * find a way to make Gooey recognize that tolerant and ocr are by default checked, so we can change back --ocr_disable to --ocr which makes more sense, same for tolerant.
 # * add count of skipped files (because of different filetypes for example)
 # * bug with input containing accentuated characters, the files will not be added (probably a bug of argparse, not Gooey)
-# * add option to force using OCR
 #
 
 from __future__ import print_function
@@ -164,42 +163,47 @@ class MyOCRParser(ShellParser):
 
 ##### Text extraction functions #####
 
-def extract_text(doc_path, ocr=False, tolerant=False, filter_lang=['fr', 'en', 'nl'], accent_remove=False, verbose=False):
+def extract_text(doc_path, ocr=False, tolerant=False, filter_lang=['fr', 'en', 'nl'], accent_remove=False, ocr_force=False, verbose=False):
     """Extract text content from a PDF or DOC/DOCX file"""
+    doc_text = None
     # List of accepted languages (to exclude gibberish pdf)
     langs_ok = filter_lang
     langs_ok_prob = 0.9  # probability of confidence necessary to not reject the lang
-    # Extract text from document and remove accentuated characters and strip blank spaces
-    if doc_path.endswith('.doc'):  # .doc filetype needs antiword (not docx, use textract directly!)
-        docparser = MyDocParser()
-        doc_text = docparser.process(doc_path, 'utf8')
-    else:  # other filetypes should be supported as-is
-        try:
-            if verbose:
-                print('Trying to decode with Textract default decoder for the filetype...')
-            doc_text = textract.process(doc_path)
-        except Exception as exc:
-            if verbose:
-                print('Encountered the following error while trying to read the PDF file:')
-                print(str(exc))
-                print('Please check if you installed the required libraries for the target filetype (please check Textract documentation)')
+    # Extract text from document using parsers (and not OCR) and remove accentuated characters and strip blank spaces
+    if not ocr_force:
+        if doc_path.endswith('.doc'):  # .doc filetype needs antiword (not docx, use textract directly!)
+            docparser = MyDocParser()
+            doc_text = docparser.process(doc_path, 'utf8')
+        else:  # other filetypes should be supported as-is
             try:
-                if doc_path.endswith('pdf'):
-                    if verbose:
-                        print('Trying to decode with Textract native PDF decoder pdfminer, please wait...')
-                    pdfminerparser = MyPdfMinerParser()
-                    doc_text = pdfminerparser.process(doc_path, 'utf8')
-                else:
-                    doc_text = None
-            except Exception as exc:
-                if not tolerant:
-                    raise
                 if verbose:
-                    print('Encountered the following error while trying to read the document:')
+                    print('Trying to decode with Textract default decoder for the filetype...')
+                doc_text = textract.process(doc_path)
+            except Exception as exc:
+                if verbose:
+                    print('Encountered the following error while trying to read the PDF file:')
                     print(str(exc))
-                doc_text = None
+                    print('Please check if you installed the required libraries for the target filetype (please check Textract documentation)')
+                try:
+                    if doc_path.endswith('pdf'):
+                        if verbose:
+                            print('Trying to decode with Textract native PDF decoder pdfminer, please wait...')
+                        pdfminerparser = MyPdfMinerParser()
+                        doc_text = pdfminerparser.process(doc_path, 'utf8')
+                    else:
+                        doc_text = None
+                except Exception as exc:
+                    if not tolerant:
+                        raise
+                    if verbose:
+                        print('Encountered the following error while trying to read the document:')
+                        print(str(exc))
+                    doc_text = None
     # Clean up doc_text and check that it is not empty nor gibberish (eg, encoded PDF)
     try:
+        if ocr_force:
+            # If we want OCR, we raise directly an exception now
+            raise Exception()
         if accent_remove:
             doc_text = _unidecode(replace_buggy_accents(doc_text.decode('utf8'), 'utf8')).lower().strip()
         else:
@@ -219,7 +223,7 @@ def extract_text(doc_path, ocr=False, tolerant=False, filter_lang=['fr', 'en', '
             print('Encountered the following error while trying to read the PDF file:')
             print(str(exc))
         # Try to decode using OCR
-        if ocr:
+        if ocr or ocr_force:
             if verbose:
                 print('Will now try to decode the document via OCR. Please be patient, it takes a while...')
             ocrparser = MyOCRParser()
@@ -245,7 +249,7 @@ def extract_text(doc_path, ocr=False, tolerant=False, filter_lang=['fr', 'en', '
 
     return doc_text
 
-def extract_text_recursive(doc_root_dir, filetype=None, ocr=False, tolerant=False, lang_filter=['fr', 'en', 'nl'], accent_remove=False, verbose=False):
+def extract_text_recursive(doc_root_dir, filetype=None, ocr=False, tolerant=False, lang_filter=['fr', 'en', 'nl'], accent_remove=False, ocr_force=False, verbose=False):
     # doc_root_dir can either be a directory or a list of files
     results = {}
     errors = []
@@ -277,7 +281,7 @@ def extract_text_recursive(doc_root_dir, filetype=None, ocr=False, tolerant=Fals
             print('* Processing file: %s' % doc_path)
         # Try to extract the text
         try:
-            doc_text = extract_text(doc_path, ocr=ocr, tolerant=tolerant, accent_remove=accent_remove, verbose=verbose)
+            doc_text = extract_text(doc_path, ocr=ocr, tolerant=tolerant, accent_remove=accent_remove, ocr_force=ocr_force, verbose=verbose)
         except Exception as exc:
             # Error
             if 'Syntax Warning: May not be a PDF file' in str(exc) or 'File is not a zip file' in str(exc) or 'No text extractable' in str(exc) or 'Unsupported image type' in str(exc):
@@ -400,6 +404,8 @@ Note: use --cmd to avoid launching the graphical interface and use as a commandl
                         help='Replace accentuated characters by their non-accentuated counterpart (great for post-processing).')
     main_parser.add_argument('--ocr_disable', action='store_true', required=False, default=False,
                         help='Disable OCR, which is used if document is unreadable otherwise. OCR takes additional time (using Tesseract v3).')
+    main_parser.add_argument('--ocr_force', action='store_true', required=False, default=False,
+                        help='Force OCR usage for any document type. Needs Tesseract v3 to work.')
     main_parser.add_argument('--tolerant_disable', action='store_true', required=False, default=False,
                         help='Tolerance: print and skip errors, else raise an exception (for debugging).')
     main_parser.add_argument('--lang_filter', metavar='fr;en', type=str, required=False, default='en;fr;nl',
@@ -421,11 +427,11 @@ Note: use --cmd to avoid launching the graphical interface and use as a commandl
     accent_remove = args.accent_remove
     filetypes = args.filetypes
     ocr = not args.ocr_disable
+    ocr_force = args.ocr_force
     tolerant = not args.tolerant_disable
     lang_filter = args.lang_filter
     verbose = args.verbose
     silent = args.silent
-    singlefilemode = False
 
     # -- Sanity checks
     # Strip trailing slashes to ensure we correctly format paths afterward
@@ -460,7 +466,7 @@ Note: use --cmd to avoid launching the graphical interface and use as a commandl
     # -- Main routine
     print('== Easytextract ==')
     print('Extracting text contents, please wait...')
-    all_texts, errors = extract_text_recursive(inputpaths, filetype=filetypes, ocr=ocr, tolerant=tolerant, lang_filter=lang_filter, accent_remove=accent_remove, verbose=verbose)
+    all_texts, errors = extract_text_recursive(inputpaths, filetype=filetypes, ocr=ocr, tolerant=tolerant, lang_filter=lang_filter, accent_remove=accent_remove, ocr_force=ocr_force, verbose=verbose)
     print('Total documents successfully extracted: %i' % len(all_texts))
 
     # Display unreadable (error) reports
