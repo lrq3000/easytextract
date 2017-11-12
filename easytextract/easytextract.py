@@ -16,6 +16,8 @@
 # * increase size of images before feeding to tesseract OCR for better performance
 # * find a way to make Gooey recognize that tolerant and ocr are by default checked, so we can change back --ocr_disable to --ocr which makes more sense, same for tolerant.
 # * add count of skipped files (because of different filetypes for example)
+# * bug with input containing accentuated characters, the files will not be added (probably a bug of argparse, not Gooey)
+# * add option to force using OCR
 #
 
 from __future__ import print_function
@@ -39,6 +41,7 @@ from textract.parsers.utils import ShellParser
 
 from csg_fileutil_libs import argparse
 from csg_fileutil_libs import langdetect
+from csg_fileutil_libs.pdfminer_pdf2txt import pdf2txt
 from csg_fileutil_libs.tee import Tee
 
 from csg_fileutil_libs.aux_funcs import replace_buggy_accents, _unidecode, _tqdm, recwalk
@@ -91,6 +94,24 @@ class MyDocParser(ShellParser):
         stdout, stderr = self.run([procpath, filename])
         return stdout
 
+class MyPdfMinerParser(ShellParser):
+    """Extract text from pdf files using the native python PdfMiner library"""
+
+    def extract(self, filename, **kwargs):
+        """Extract text from pdfs using pdfminer and pdf2txt.py wrapper."""
+        # Create a temporary output file
+        tempfilefh, tempfilepath = mkstemp(suffix='.txt')  # tesseract < 3.03 do not support "stdout" argument, so need to save into a file
+        os.close(tempfilefh)  # close to allow writing to tesseract
+        # Extract text from pdf using the entry script pdf2txt (part of PdfMiner)
+        pdf2txt.main(['', '-o', tempfilepath, filename])
+        #stdout, _ = self.run(['pdf2txt.py', filename])
+        # Read the results of extraction
+        with open(tempfilepath, 'rb') as f:
+            res = f.read()
+        # Remove temporary output file
+        os.remove(tempfilepath)
+        return res
+
 class MyOCRParser(ShellParser):
     """Extract text from various image file formats or pdf containing scan images using tesseract-ocr (compatible with tesseract v3.02.02, only version currently available on Windows)"""
     
@@ -124,12 +145,13 @@ class MyOCRParser(ShellParser):
         return res
 
     def extract_pdf(self, filename, **kwargs):
-        """Extract text from pdfs using tesseract (per-page OCR)."""
+        """Extract text from pdfs using tesseract (per-page OCR) by converting each pdf page to an image."""
         temp_dir = mkdtemp()
         base = os.path.join(temp_dir, 'conv')
         contents = []
         try:
-            stdout, _ = self.run(['pdftoppm', filename, base])  # from poppler, http://poppler.freedesktop.org
+            if filename.endswith('.pdf'):
+                stdout, _ = self.run(['pdftoppm', filename, base])  # from poppler or Xpdf, http://poppler.freedesktop.org
 
             for page in sorted(os.listdir(temp_dir)):
                 page_path = os.path.join(temp_dir, page)
@@ -142,7 +164,7 @@ class MyOCRParser(ShellParser):
 
 ##### Text extraction functions #####
 
-def extract_text(doc_path, ocr=False, tolerant=False, filter_lang=['fr', 'en', 'nl']):
+def extract_text(doc_path, ocr=False, tolerant=False, filter_lang=['fr', 'en', 'nl'], accent_remove=False, verbose=False):
     """Extract text content from a PDF or DOC/DOCX file"""
     # List of accepted languages (to exclude gibberish pdf)
     langs_ok = filter_lang
@@ -150,33 +172,65 @@ def extract_text(doc_path, ocr=False, tolerant=False, filter_lang=['fr', 'en', '
     # Extract text from document and remove accentuated characters and strip blank spaces
     if doc_path.endswith('.doc'):  # .doc filetype needs antiword (not docx, use textract directly!)
         docparser = MyDocParser()
-        doc_text = _unidecode(replace_buggy_accents(docparser.process(doc_path, 'utf8').decode('utf8'), 'utf8')).lower()
+        doc_text = docparser.process(doc_path, 'utf8')
     else:  # other filetypes should be supported as-is
         try:
-            doc_text = _unidecode(replace_buggy_accents(textract.process(doc_path).decode('utf8'), 'utf8')).lower().strip()
-            # Failed to decode anything from document (maybe pdf contains only image and no text? Can try to use tesseract with textract but lot of work for not much...)
-            if not doc_text:
-                raise ValueError('No text extractable from the specified file.')
-            elif filter_lang is not None:
-                # Additional check by language
-                lang_check = langdetect.detect_langs(doc_text)[0]
-                if lang_check.lang not in langs_ok or lang_check.prob < langs_ok_prob:
-                    raise ValueError('No text extractable or language unrecognized from the specified file.')
+            if verbose:
+                print('Trying to decode with Textract default decoder for the filetype...')
+            doc_text = textract.process(doc_path)
         except Exception as exc:
-            if tolerant:
+            if verbose:
                 print('Encountered the following error while trying to read the PDF file:')
                 print(str(exc))
-                print('Will now try to decode PDF via OCR. Please be patient, it takes a while...')
-                pass
-            else:
-                raise
-            # Try to decode using OCR
-            if ocr:
-                ocrparser = MyOCRParser()
+                print('Please check if you installed the required libraries for the target filetype (please check Textract documentation)')
+            try:
+                if doc_path.endswith('pdf'):
+                    if verbose:
+                        print('Trying to decode with Textract native PDF decoder pdfminer, please wait...')
+                    pdfminerparser = MyPdfMinerParser()
+                    doc_text = pdfminerparser.process(doc_path, 'utf8')
+                else:
+                    doc_text = None
+            except Exception as exc:
+                if not tolerant:
+                    raise
+                if verbose:
+                    print('Encountered the following error while trying to read the document:')
+                    print(str(exc))
+                doc_text = None
+    # Clean up doc_text and check that it is not empty nor gibberish (eg, encoded PDF)
+    try:
+        if accent_remove:
+            doc_text = _unidecode(replace_buggy_accents(doc_text.decode('utf8'), 'utf8')).lower().strip()
+        else:
+            doc_text = replace_buggy_accents(doc_text.decode('utf8'), 'utf8').lower().strip()
+        # Failed to decode anything from document (maybe pdf contains only image and no text? Can try to use tesseract with textract but lot of work for not much...)
+        if not doc_text:
+            raise ValueError('No text extractable from the specified file.')
+        elif filter_lang is not None:
+            # Additional check by language
+            lang_check = langdetect.detect_langs(doc_text)[0]
+            if lang_check.lang not in langs_ok or lang_check.prob < langs_ok_prob:
+                raise ValueError('No text extractable or language unrecognized from the specified file.')
+    except Exception as exc:
+        if not tolerant:
+            raise
+        if verbose:
+            print('Encountered the following error while trying to read the PDF file:')
+            print(str(exc))
+        # Try to decode using OCR
+        if ocr:
+            if verbose:
+                print('Will now try to decode the document via OCR. Please be patient, it takes a while...')
+            ocrparser = MyOCRParser()
+            doc_text = ocrparser.process(doc_path, 'utf8')
+            if accent_remove:
                 #doc_text = _unidecode(replace_buggy_accents(textract.process(doc_path, method='tesseract', language='fra').decode('utf8'), 'utf8')).lower().strip()  # Should work, but does not on Windows because you need tesseract v3.03 with support for "stdout", which is currently unavailable on Windows...
-                doc_text = _unidecode(replace_buggy_accents(ocrparser.process(doc_path, 'utf8').decode('utf8'), 'utf8')).lower().strip()
-            if not ocr or not doc_text:  # Failed again, raise the exception!
-                raise
+                doc_text = _unidecode(replace_buggy_accents(doc_text.decode('utf8'), 'utf8')).lower().strip()
+            else:
+                doc_text = replace_buggy_accents(doc_text.decode('utf8'), 'utf8').lower().strip()
+        if not ocr or not doc_text:  # Failed again, raise the exception!
+            raise
     doc_text = re.sub('[ \t\f\v]+', ' ', doc_text)  # replace abusive spaces
     doc_text = re.sub('[\n\r]+', '\n', doc_text)  # replace abusive line breaks
     doc_text = re.sub('(\r?\s?\n\r?\s?)+', '\n', doc_text)  # replace abusive line breaks
@@ -191,7 +245,7 @@ def extract_text(doc_path, ocr=False, tolerant=False, filter_lang=['fr', 'en', '
 
     return doc_text
 
-def extract_text_recursive(doc_root_dir, filetype=None, ocr=False, tolerant=False, lang_filter=['fr', 'en', 'nl'], verbose=False):
+def extract_text_recursive(doc_root_dir, filetype=None, ocr=False, tolerant=False, lang_filter=['fr', 'en', 'nl'], accent_remove=False, verbose=False):
     # doc_root_dir can either be a directory or a list of files
     results = {}
     errors = []
@@ -223,7 +277,7 @@ def extract_text_recursive(doc_root_dir, filetype=None, ocr=False, tolerant=Fals
             print('* Processing file: %s' % doc_path)
         # Try to extract the text
         try:
-            doc_text = extract_text(doc_path, ocr=ocr, tolerant=tolerant)
+            doc_text = extract_text(doc_path, ocr=ocr, tolerant=tolerant, accent_remove=accent_remove, verbose=verbose)
         except Exception as exc:
             # Error
             if 'Syntax Warning: May not be a PDF file' in str(exc) or 'File is not a zip file' in str(exc) or 'No text extractable' in str(exc) or 'Unsupported image type' in str(exc):
@@ -342,6 +396,8 @@ Note: use --cmd to avoid launching the graphical interface and use as a commandl
     # Optional output/copy mode
     main_parser.add_argument('--filetypes', metavar='pdf;docx', type=str, required=False, default='pdf;docx;doc',
                         help='Filter by filetype (limited by Textract support). Eg, pdf;docx;doc', **widget_text)
+    main_parser.add_argument('-a', '--accent_remove', action='store_true', required=False, default=False,
+                        help='Replace accentuated characters by their non-accentuated counterpart (great for post-processing).')
     main_parser.add_argument('--ocr_disable', action='store_true', required=False, default=False,
                         help='Disable OCR, which is used if document is unreadable otherwise. OCR takes additional time (using Tesseract v3).')
     main_parser.add_argument('--tolerant_disable', action='store_true', required=False, default=False,
@@ -362,6 +418,7 @@ Note: use --cmd to avoid launching the graphical interface and use as a commandl
     allinputpaths = args.input
     inputpaths = [get_fullpath(path) for path in allinputpaths]
     outputpath = get_fullpath(args.output)
+    accent_remove = args.accent_remove
     filetypes = args.filetypes
     ocr = not args.ocr_disable
     tolerant = not args.tolerant_disable
@@ -403,21 +460,26 @@ Note: use --cmd to avoid launching the graphical interface and use as a commandl
     # -- Main routine
     print('== Easytextract ==')
     print('Extracting text contents, please wait...')
-    all_texts, errors = extract_text_recursive(inputpaths, filetype=filetypes, ocr=ocr, tolerant=tolerant, lang_filter=lang_filter, verbose=verbose)
-    print('Total documents processed: %i' % len(all_texts))
-
-    # Write the extracted text content(s) to text file(s)
-    for filename, text in all_texts.items():
-        outfilepath = os.path.join(outputpath, filename+'.txt')
-        with open(outfilepath, 'w') as f:
-            f.write(text)
-    print('Successfully wrote all text contents to %s' % outputpath)
+    all_texts, errors = extract_text_recursive(inputpaths, filetype=filetypes, ocr=ocr, tolerant=tolerant, lang_filter=lang_filter, accent_remove=accent_remove, verbose=verbose)
+    print('Total documents successfully extracted: %i' % len(all_texts))
 
     # Display unreadable (error) reports
     if errors:
         print('Total number of unreadable documents: %i. Here is the detailed list:' % len(errors))
         for err in errors:
             print('* %s' % err)
+
+    # Write the extracted text content(s) to text file(s)
+    import codecs
+    for filename, text in all_texts.items():
+        outfilepath = os.path.join(outputpath, filename+'.txt')
+        if accent_remove:
+            with open(outfilepath, 'w') as f:  # does not support writing accentuated characters, but it writes as ascii, which is nice
+                f.write(text)
+        else:
+            with codecs.open(outfilepath, mode='w', encoding='utf-8') as f:  # supports accentuated characters
+                f.write(text)
+    print('Saved extracted text contents to %s' % outputpath)
 
     return 0
 

@@ -3,7 +3,7 @@
 __all__ = ["__version__"]
 
 # major, minor, patch, -extra
-version_info = 1, 0, 0
+version_info = 1, 1, 2
 
 # Nice string for the version
 __version__ = '.'.join(map(str, version_info))
