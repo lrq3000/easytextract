@@ -13,10 +13,10 @@
 # Tested on Python 2.7.12
 #
 # TODO:
-# * increase size of images before feeding to tesseract OCR for better performance
 # * find a way to make Gooey recognize that tolerant and ocr are by default checked, so we can change back --ocr_disable to --ocr which makes more sense, same for tolerant.
 # * add count of skipped files (because of different filetypes for example)
 # * bug with input containing accentuated characters, the files will not be added (probably a bug of argparse, not Gooey)
+# * migrate to pyocr? https://medium.com/@winston.smith.spb/python-ocr-for-pdf-or-compare-textract-pytesseract-and-pyocr-acb19122f38c
 #
 
 from __future__ import print_function
@@ -44,6 +44,11 @@ from csg_fileutil_libs.pdfminer_pdf2txt import pdf2txt
 from csg_fileutil_libs.tee import Tee
 
 from csg_fileutil_libs.aux_funcs import replace_buggy_accents, _unidecode, _tqdm, recwalk
+
+# For OCR image preprocessing, disabled for the moment because it reduces the accuracy (particularly for the disposition of multi-column documents)
+#import PIL
+#import PIL.Image
+#import PIL.ImageFilter
 
 
 ##### Files auxiliary functions #####
@@ -120,11 +125,32 @@ class MyOCRParser(ShellParser):
         else:
             return self.extract_image(filename, **kwargs)
 
+    def preprocess_image(self, filename):
+        # Preprocess image to enhance text extraction
+        img = PIL.Image.open(filename)
+        img = img.filter(PIL.ImageFilter.UnsharpMask(radius=6.8, percent=300, threshold=0))  # sharpen
+        img = img.convert('L')  # convert to monochrome black and white
+        # compute average intensity value
+        #width,height = img.size
+        #total = 0
+        #for i in range(0,width):
+        #    for j in range(0,height):
+        #        total += img.getpixel((i,j))
+        #mean = total / (width * height)
+        # resize
+        img = img.resize((img.size[0]*4, img.size[1]*4), PIL.Image.ANTIALIAS)  # resize to artificially increase DPI
+        img = img.filter(PIL.ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))  # sharpen again
+        # threshold!
+        img = img.point(lambda x: 0 if x<128 else 255, '1') # could also use (255-mean) as threshold but it thresholds too much, it cancels the unsharp (bolding the characters)
+        img.save(filename)  # overwrite image
+
     def extract_image(self, filename, **kwargs):
         """Extract text from various image file formats using tesseract-ocr (compatible with tesseract v3.02.02, only version currently available on Windows)"""
         # TODO: if proportion of image wrong, resize automatically to fit A4 proportions using PILLOW! if width > percentage_threshold, downsize width, else if width <, then downsize height.
         filename = os.path.abspath(filename)  # tesseract need absolute paths!
         dirpath = os.path.dirname(filename)
+        # Preprocess image - DISABLED as this lowers the accuracy for some aspects (in particular it lowers the accuracy at detecting multiple columns and thus at separating text contents!)
+        #self.preprocess_image(filename)
         # Create a temporary output txt file for tesseract
         tempfilefh, tempfilepath = mkstemp(suffix='.txt')  # tesseract < 3.03 do not support "stdout" argument, so need to save into a file
         os.close(tempfilefh)  # close to allow writing to tesseract
