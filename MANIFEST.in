@@ -2,11 +2,14 @@
 include LICENCE
 include README.rst
 
-# Aux libs
+# Aux libs includes
 recursive-include easytextract/csg_fileutil_libs *.*
+recursive-include easytextract/csg_fileutil_libs *.properties
+graft easytextract/csg_fileutil_libs/langdetect/profiles
+
+# Excludes
 recursive-exclude easytextract/csg_fileutil_libs *.pyc
 recursive-exclude easytextract/csg_fileutil_libs *.pyd
-recursive-exclude easytextract/csg_fileutil_libs *.properties
 
 # PyInstaller builder
 include easytextract_pyinstaller.spec
