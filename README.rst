@@ -27,7 +27,7 @@ To run Easytextract from Python, you need Python > 2.7 and to pip install textra
 Then install the following libraries to support the filetypes you want:
 
 * For PDF, pip install PDFMiner. To get additional features and better PDF extraction, you can install pdftotext, part of poppler or Xpdf.
-* For OCR, you need to install Tesseract >= 3.02 (but not 3.0 nor 4!).
+* For OCR, you need to install Tesseract >= 3.02 (but not 3.0 nor 4!) and pdftoppm.
 * For DOCX, pip install python-docx2txt.
 * For DOC, install antiword in the location on Windows: C:\antiword\antiword.exe , for Linux and Mac you will need to change the path inside the script.
 * to support other types such as audio, see https://textract.readthedocs.io/en/stable/#currently-supporting
@@ -36,7 +36,7 @@ WINDOWS
 ~~~~~~~
 By using the Windows binary (only for Windows 64-bits), PDF and DOCX are directly supported.
 
-To enable OCR, and install tesseract >= v3.02 (not v4!) for your platform beforehand.
+To enable OCR, and install tesseract >= v3.02 (not v4!) for your platform beforehand. You also need to install pdftoppm.exe.
 
 For DOC support (not DOCX as it is already supported natively), you will also need antiword installed in C:\antiword\antiword.exe.
 
