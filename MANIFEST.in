@@ -1,0 +1,15 @@
+# Misc
+include LICENCE
+include README.rst
+
+# Aux libs
+recursive-include easytextract/csg_fileutil_libs *.*
+recursive-exclude easytextract/csg_fileutil_libs *.pyc
+recursive-exclude easytextract/csg_fileutil_libs *.pyd
+recursive-exclude easytextract/csg_fileutil_libs *.properties
+
+# PyInstaller builder
+include easytextract_pyinstaller.spec
+
+# Documentation
+#graft doc
