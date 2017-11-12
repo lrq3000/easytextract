@@ -17,6 +17,7 @@
 # * add count of skipped files (because of different filetypes for example)
 # * bug with input containing accentuated characters, the files will not be added (probably a bug of argparse, not Gooey)
 # * migrate to pyocr? https://medium.com/@winston.smith.spb/python-ocr-for-pdf-or-compare-textract-pytesseract-and-pyocr-acb19122f38c
+# * use stroke width transformation (natural scene extraction)? https://github.com/openpaperwork/libpillowfight#stroke-width-transformation
 #
 
 from __future__ import print_function
